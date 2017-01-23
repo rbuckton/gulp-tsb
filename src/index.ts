@@ -4,11 +4,17 @@
 
 import vinyl = require('vinyl');
 import * as through from 'through';
-import * as builder from './builder';
+import {createTypeScriptBuilder, IConfiguration, CancellationToken} from './builder';
 import * as ts from 'typescript';
-import {Stream} from 'stream';
+import {Stream, Transform} from 'stream';
 import {readFileSync, existsSync, readdirSync} from 'fs';
-import {extname, dirname} from 'path';
+import {extname, dirname, resolve} from 'path';
+
+declare module "through" {
+    interface ThroughStream {
+        queue(data: any): void;
+    }
+}
 
 // We actually only want to read the tsconfig.json file. So all methods
 // to read the FS are 'empty' implementations.
@@ -26,50 +32,125 @@ const _parseConfigHost = {
 };
 
 export interface IncrementalCompiler {
-    (): Stream;
+    (): Transform;
     program?: ts.Program;
 }
 
-export function create(configOrName: { [option: string]: string | number | boolean; } | string, verbose?: boolean, json?: boolean, onError?: (message: any) => void): IncrementalCompiler {
+export type CompilerOptions = {
+    [P in keyof ts.CompilerOptions]: ts.CompilerOptionsValue;
+};
 
-    let options = ts.getDefaultCompilerOptions();
-    let config: builder.IConfiguration = { json, verbose, noFilesystemLookup: false };
+export type CreateOptions = {
+    /** Indicates whether to report compiler diagnostics as JSON instead of as a string. */
+    json?: boolean;
+    /** Indicates whether to report verbose compilation messages. */
+    verbose?: boolean;
+    /** Provides an explicit instance of the typescript compiler to use. */
+    typescript?: typeof ts;
+    /** Custom callback used to report compiler diagnostics. */
+    onError?: (message: any) => void;
+};
 
-    if (typeof configOrName === 'string') {
-        var parsed = ts.readConfigFile(configOrName, _parseConfigHost.readFile);
-        options = ts.parseJsonConfigFileContent(parsed.config, _parseConfigHost, dirname(configOrName)).options;
+/**
+ * Create an IncrementalCompiler from a tsconfig.json file.
+ *
+ * @param project The path to a tsconfig.json file or its parent directory.
+ * @param createOptions Options to pass on to the IncrementalCompiler.
+ */
+export function create(project: string, createOptions?: CreateOptions): IncrementalCompiler;
+
+/**
+ * Create an IncrementalCompiler from a tsconfig.json file.
+ *
+ * @param project The path to a tsconfig.json file or its parent directory.
+ * @param verbose Indicates whether to report verbose compilation messages.
+ * @param json Indicates whether to report compiler diagnostics as JSON instead of as a string.
+ * @param onError Custom callback used to report compiler diagnostics.
+ */
+export function create(project: string, verbose?: boolean, json?: boolean, onError?: (message: any) => void): IncrementalCompiler;
+
+/**
+ * Create an IncrementalCompiler from a set of options.
+ *
+ * @param compilerOptions Options to pass on to the TypeScript compiler.
+ * @param createOptions Options to pass on to the IncrementalCompiler.
+ */
+export function create(compilerOptions: CompilerOptions, createOptions?: CreateOptions): IncrementalCompiler;
+
+/**
+ * Create an IncrementalCompiler from a set of options.
+ *
+ * @param compilerOptions Options to pass on to the TypeScript compiler.
+ * @param verbose Indicates whether to report verbose compilation messages.
+ * @param json Indicates whether to report compiler diagnostics as JSON instead of as a string.
+ * @param onError Custom callback used to report compiler diagnostics.
+ */
+export function create(compilerOptions: CompilerOptions, verbose?: boolean, json?: boolean, onError?: (message: any) => void): IncrementalCompiler;
+
+export function create(projectOrCompilerOptions: CompilerOptions | string, verboseOrCreateOptions?: boolean | CreateOptions, json?: boolean, onError?: (message: any) => void): IncrementalCompiler {
+    let verbose: boolean;
+    let typescript: typeof ts;
+    let base: string;
+    if (typeof verboseOrCreateOptions === 'boolean') {
+        verbose = verboseOrCreateOptions;
+    }
+    else if (verboseOrCreateOptions) {
+        verbose = verboseOrCreateOptions.verbose;
+        json = verboseOrCreateOptions.json;
+        onError = verboseOrCreateOptions.onError;
+        typescript = verboseOrCreateOptions.typescript;
+    }
+
+    if (!typescript) typescript = ts;
+
+    let project: string | undefined;
+    let projectJson: any;
+    let projectDiagnostic: ts.Diagnostic | undefined;
+    if (typeof projectOrCompilerOptions === 'string') {
+        project = resolveProject(projectOrCompilerOptions);
+        const parsed = typescript.readConfigFile(project, typescript.sys.readFile);
         if (parsed.error) {
             console.error(parsed.error);
-            return () => null;
+            projectDiagnostic = parsed.error;
         }
-    } else {
-        options = ts.parseJsonConfigFileContent({ compilerOptions: configOrName }, _parseConfigHost, './').options;
-        Object.assign(config, configOrName);
+        else {
+            projectJson = parsed.config;
+        }
+    }
+    else {
+        projectJson = {
+            compilerOptions: projectOrCompilerOptions || typescript.getDefaultCompilerOptions()
+        };
     }
 
-    if (!onError) {
-        onError = (err) => console.log(JSON.stringify(err, null, 4));
-    }
+    if (!onError) onError = err => console.log(JSON.stringify(err, null, 4));
 
-    const _builder = builder.createTypeScriptBuilder(config, options);
+    const options = typescript.parseJsonConfigFileContent(projectJson, _parseConfigHost, project ? dirname(project) : './').options;
+    const config = { json, verbose, noFilesystemLookup: false, typescript };
+    const builder = createTypeScriptBuilder(config, options);
+    const compiler = <IncrementalCompiler>((token?: CancellationToken): Transform => {
+        if (projectDiagnostic) {
+            return null;
+        }
 
-    function createStream(token?: builder.CancellationToken): Stream {
-
-        return through(function (file: vinyl) {
+        return through(function (this: through.ThroughStream, file: vinyl) {
             // give the file to the compiler
             if (file.isStream()) {
                 this.emit('error', 'no support for streams');
                 return;
             }
-            _builder.file(file);
-        }, function () {
+            builder.file(file);
+        }, function (this: through.ThroughStream) {
             // start the compilation process
-            _builder.build(file => this.queue(file), onError, token).then(() => this.queue(null));
+            builder.build(file => this.queue(file), onError, token).then(() => this.queue(null));
         });
-    }
+    });
 
-    let result = (token: builder.CancellationToken) => createStream(token);
-    Object.defineProperty(result, 'program', { get: () => _builder.languageService.getProgram() });
+    Object.defineProperty(compiler, 'program', { get: () => builder.languageService.getProgram() });
+    return compiler;
+}
 
-    return <IncrementalCompiler> result;
+function resolveProject(project: string) {
+    const possibleProject = resolve(project, "tsconfig.json");
+    return existsSync(possibleProject) ? possibleProject : project;
 }

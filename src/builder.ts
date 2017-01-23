@@ -12,6 +12,7 @@ export interface IConfiguration {
     json: boolean;
     noFilesystemLookup: boolean;
     verbose: boolean;
+    typescript: typeof ts;
     _emitWithoutBasePath?: boolean;
     _emitLanguageService?: boolean;
 }
@@ -37,8 +38,8 @@ function normalize(path: string): string {
 }
 
 export function createTypeScriptBuilder(config: IConfiguration, compilerOptions: ts.CompilerOptions): ITypeScriptBuilder {
-
-    let host = new LanguageServiceHost(compilerOptions, config.noFilesystemLookup || false),
+    const ts = getTypeScript(config);
+    let host = new LanguageServiceHost(compilerOptions, config),
         service = ts.createLanguageService(host, ts.createDocumentRegistry()),
         lastBuildVersion: { [path: string]: string } = Object.create(null),
         lastDtsHash: { [path: string]: string } = Object.create(null),
@@ -425,18 +426,17 @@ class VinylScriptSnapshot extends ScriptSnapshot {
 }
 
 class LanguageServiceHost implements ts.LanguageServiceHost {
-
+    private _config: IConfiguration;
     private _settings: ts.CompilerOptions;
-    private _noFilesystemLookup: boolean;
     private _snapshots: { [path: string]: ScriptSnapshot };
     private _projectVersion: number;
     private _dependencies: utils.graph.Graph<string>;
     private _dependenciesRecomputeList: string[];
     private _fileNameToDeclaredModule: { [path: string]: string[] };
 
-    constructor(settings: ts.CompilerOptions, noFilesystemLookup:boolean) {
+    constructor(settings: ts.CompilerOptions, config: IConfiguration) {
         this._settings = settings;
-        this._noFilesystemLookup = noFilesystemLookup;
+        this._config = config;
         this._snapshots = Object.create(null);
         this._projectVersion = 1;
         this._dependencies = new utils.graph.Graph<string>(s => s);
@@ -485,7 +485,7 @@ class LanguageServiceHost implements ts.LanguageServiceHost {
     getScriptSnapshot(filename: string): ScriptSnapshot {
         filename = normalize(filename);
         let result = this._snapshots[filename];
-        if (!result && !this._noFilesystemLookup) {
+        if (!result && !this._config.noFilesystemLookup) {
             try {
                 result = new VinylScriptSnapshot(new Vinyl(<any> {
                     path: filename,
@@ -555,7 +555,7 @@ class LanguageServiceHost implements ts.LanguageServiceHost {
     }
 
     getDefaultLibFileName(options: ts.CompilerOptions): string {
-        return normalize(path.join(this.getDefaultLibLocation(), ts.getDefaultLibFileName(options)));
+        return normalize(path.join(this.getDefaultLibLocation(), getTypeScript(this._config).getDefaultLibFileName(options)));
     }
 
     getDefaultLibLocation() {
@@ -582,7 +582,7 @@ class LanguageServiceHost implements ts.LanguageServiceHost {
         }
         filename = normalize(filename);
         var snapshot = this.getScriptSnapshot(filename),
-            info = ts.preProcessFile(snapshot.getText(0, snapshot.getLength()), true);
+            info = getTypeScript(this._config).preProcessFile(snapshot.getText(0, snapshot.getLength()), true);
 
         // (1) ///-references
         info.referencedFiles.forEach(ref => {
@@ -622,4 +622,8 @@ class LanguageServiceHost implements ts.LanguageServiceHost {
             }
         });
     }
+}
+
+function getTypeScript(config: IConfiguration) {
+    return config.typescript || ts;
 }

@@ -40,7 +40,7 @@
     "gulp-mocha": "^3.0.1",
     "mocha": "*",
     "run-sequence": "^1.2.2",
-    "typescript": "^2.0.3"
+    "typescript": "^2.1.5"
   },
   "peerDependencies": {
     "typescript": "^2.0.10"

@@ -41,7 +41,7 @@ export module collections {
 }
 
 export module strings {
-	
+
 	/**
 	 * The empty string. The one and only.
 	 */
