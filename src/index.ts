@@ -50,7 +50,7 @@ export function create(configOrName: { [option: string]: string | number | boole
     }
 
     if (!onError) {
-        onError = (err) => console.log(JSON.stringify(err, null, 4));
+        onError = (err) => console.log(typeof err === "string" ? err : JSON.stringify(err, null, 4));
     }
 
     if (!config.base) config.base = process.cwd();

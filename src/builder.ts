@@ -80,12 +80,7 @@ export function createTypeScriptBuilder(config: IConfiguration, compilerOptions:
             message: string;
 
         if (!config.json) {
-            message = utils.strings.format('{0}({1},{2}): {3}',
-                diag.file.fileName,
-                lineAndCh.line + 1,
-                lineAndCh.character + 1,
-                ts.flattenDiagnosticMessageText(diag.messageText, '\n'));
-
+            message = ts.formatDiagnostics([diag], host).replace(/\r?\n$/, "");
         } else {
             message = JSON.stringify({
                 filename: diag.file.fileName,
@@ -108,14 +103,6 @@ export function createTypeScriptBuilder(config: IConfiguration, compilerOptions:
             host.removeScriptSnapshot(file.path);
         } else {
             host.addScriptSnapshot(file.path, new ScriptSnapshot(file));
-        }
-    }
-
-    function getNewLine() {
-        switch (compilerOptions.newLine) {
-            case ts.NewLineKind.CarriageReturnLineFeed: return "\r\n";
-            case ts.NewLineKind.LineFeed: return "\n";
-            default: return EOL;
         }
     }
 
@@ -258,7 +245,7 @@ export function createTypeScriptBuilder(config: IConfiguration, compilerOptions:
                             // update the contents for the sourcemap file
                             sourceMapFile.contents = new Buffer(JSON.stringify(sourceMap));
 
-                            const newLine = getNewLine();
+                            const newLine = host.getNewLine();
                             let contents = javaScriptFile.contents.toString();
                             if (originalCompilerOptions.inlineSourceMap) {
                                 // restore the sourcemap as an inline source map in the javaScript file.
@@ -556,6 +543,18 @@ class LanguageServiceHost implements ts.LanguageServiceHost {
 
     getProjectVersion(): string {
         return String(this._projectVersion);
+    }
+
+    getCanonicalFileName(file: string) {
+        return file;
+    }
+
+    getNewLine() {
+        switch (this._settings.newLine) {
+            case ts.NewLineKind.CarriageReturnLineFeed: return "\r\n";
+            case ts.NewLineKind.LineFeed: return "\n";
+            default: return EOL;
+        }
     }
 
     getScriptFileNames(): string[] {
