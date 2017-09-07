@@ -137,7 +137,12 @@ export function createTypeScriptBuilder(config: IConfiguration, compilerOptions:
         function checkSemanticsSoon(fileName: string): Promise<ts.Diagnostic[]> {
             return new Promise<ts.Diagnostic[]>(resolve => {
                 process.nextTick(function () {
-                      resolve(service.getSemanticDiagnostics(fileName));
+                    let diagnostics = service.getSemanticDiagnostics(fileName);
+                    if (!originalCompilerOptions.declaration) {
+                        // ignore declaration diagnostics if the user did not request declarations
+                        diagnostics = diagnostics.filter(diagnostic => diagnostic.code < 4000 || diagnostic.code >= 5000);
+                    }
+                    resolve(diagnostics);
                 });
             });
         }
